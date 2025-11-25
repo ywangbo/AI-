@@ -84,6 +84,13 @@
         font-family: 'Press Start 2P', 'SimSun', monospace;
       }
       
+      .blink {
+        animation: blink-animation 1s steps(2, start) infinite;
+      }
+      @keyframes blink-animation {
+        to { visibility: hidden; }
+      }
+
       #error-display {
         color: red;
         padding: 20px;
@@ -422,6 +429,10 @@
           return null;
         } catch (e) {
           console.error("Failed to generate scene image:", e);
+          // Check for Rate Limit / Quota Exceeded (429)
+          if (e.toString().includes('429') || (e.message && e.message.includes('429'))) {
+             return "ERROR_429";
+          }
           return null;
         }
       };
@@ -589,7 +600,9 @@
         const [sceneImage, setSceneImage] = useState(null);
         const [isMuted, setIsMuted] = useState(false);
         const [showKeyModal, setShowKeyModal] = useState(false);
+        const [visualError, setVisualError] = useState(null);
         const bottomRef = useRef(null);
+        const lastGenTimeRef = useRef(0);
 
         const themeStyles = {
           green: {
@@ -659,8 +672,15 @@
           }
           
           if (!initialText.includes("严重错误")) {
+             // Initial generation - no throttle for first image usually, or mild throttle
+             const now = Date.now();
+             lastGenTimeRef.current = now;
              generatePixelArtScene(initialText).then(img => {
-               if (img) setSceneImage(img);
+               if (img === "ERROR_429") {
+                 setVisualError("视觉系统离线: 配额耗尽 (429)");
+               } else if (img) {
+                 setSceneImage(img);
+               }
              });
           }
 
@@ -716,9 +736,19 @@
               ));
             }
 
-            if (fullText.length > 50) { 
+            // --- THROTTLE LOGIC FOR IMAGES ---
+            // Only generate if text is substantial AND enough time has passed (20s)
+            // This prevents 429 quota errors.
+            const now = Date.now();
+            if (fullText.length > 50 && (now - lastGenTimeRef.current > 20000)) { 
+              lastGenTimeRef.current = now;
+              setVisualError(null); // Reset error state to try again
               generatePixelArtScene(fullText).then(img => {
-                if (img) setSceneImage(img);
+                if (img === "ERROR_429") {
+                   setVisualError("视觉系统离线: 配额耗尽 (429)");
+                } else if (img) {
+                   setSceneImage(img);
+                }
               });
             }
 
@@ -786,11 +816,15 @@
                        pixel-border
                      `}>
                         <Scanlines />
-                        {sceneImage ? (
+                        {sceneImage && !visualError ? (
                           <img src={sceneImage} alt="Scene" className="w-full h-full object-cover pixelated crt-flicker" />
                         ) : (
-                          <div className="w-full h-full flex items-center justify-center text-gray-600 font-pixel text-xs text-center p-4">
-                             无视频信号输入<br/>视觉模块加载中...
+                          <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 font-pixel text-xs text-center p-4">
+                             {visualError ? (
+                               <span className="text-red-500 blink">{visualError}<br/>等待恢复...</span>
+                             ) : (
+                               <>无视频信号输入<br/>视觉模块加载中...</>
+                             )}
                           </div>
                         )}
                         <div className="absolute top-2 left-2 bg-blue-800/80 border-2 border-white p-2 text-white font-pixel text-[10px] md:text-xs">
