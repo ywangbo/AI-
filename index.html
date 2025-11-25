@@ -89,6 +89,13 @@
         padding: 20px;
         font-family: monospace;
         display: none;
+        white-space: pre-wrap;
+        background: rgba(0,0,0,0.9);
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        z-index: 9999;
       }
     </style>
     
@@ -97,7 +104,7 @@
   "imports": {
     "react": "https://esm.sh/react@18.2.0",
     "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-    "@google/genai": "https://esm.sh/@google/genai@0.1.0",
+    "@google/genai": "https://esm.sh/@google/genai",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
     "react/": "https://aistudiocdn.com/react@^19.2.0/"
   }
@@ -109,7 +116,6 @@
         env: {
           NODE_ENV: 'production',
           // Note: In a real deploy, you might replace this string with your key or inject it via build tools.
-          // Since we cannot ask for UI input, we assume it's injected here or previously defined.
           API_KEY: '' 
         }
       };
@@ -119,7 +125,7 @@
         const errorDiv = document.getElementById('error-display');
         if (errorDiv) {
           errorDiv.style.display = 'block';
-          errorDiv.innerText = "SYSTEM ERROR: " + message + "\nSource: " + source + ":" + lineno;
+          errorDiv.innerText = "SYSTEM ERROR: " + message + "\nSource: " + source + ":" + lineno + "\n" + (error ? error.stack : '');
         }
       };
     </script>
