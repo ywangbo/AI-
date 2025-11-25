@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Scanlines } from './components/Scanlines';
-import { TerminalInput } from './components/TerminalInput';
-import { TypewriterText } from './components/TypewriterText';
-import { startNewGame, sendPlayerAction, generatePixelArtScene } from './services/geminiService';
-import { audioService } from './services/audioService';
-import { ChatMessage, Sender } from './types';
+import { Scanlines } from './components/Scanlines.tsx';
+import { TerminalInput } from './components/TerminalInput.tsx';
+import { TypewriterText } from './components/TypewriterText.tsx';
+import { startNewGame, sendPlayerAction, generatePixelArtScene } from './services/geminiService.ts';
+import { audioService } from './services/audioService.ts';
+import { ChatMessage, Sender } from './types.ts';
 
 // Constants for retro feels
 const BOOT_SEQUENCE = [

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { audioService } from '../services/audioService';
+import { audioService } from '../services/audioService.ts';
 
 interface TerminalInputProps {
   onSubmit: (text: string) => void;
