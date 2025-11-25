@@ -1,0 +1,5 @@
+{
+  "name": "幻境终端",
+  "description": "一款充满怀旧情怀的 AI 文字冒险游戏，利用 Gemini API 在复古 CRT 终端界面中生成无限的互动小说剧本。",
+  "requestFramePermissions": []
+}
