@@ -5,14 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>幻境终端 - AI 文字冒险</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Babel for in-browser compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=VT323&family=Press+Start+2P&display=swap');
       
       body {
         background-color: #050505;
-        /* Updated font stack: Press Start 2P for English/Numbers, SimSun for pixel-style Chinese */
         font-family: 'VT323', 'SimSun', 'NSimSun', 'Courier New', monospace;
         overflow: hidden;
+        margin: 0;
       }
 
       /* Custom Scrollbar */
@@ -81,20 +83,696 @@
       .font-pixel {
         font-family: 'Press Start 2P', 'SimSun', monospace;
       }
+      
+      #error-display {
+        color: red;
+        padding: 20px;
+        font-family: monospace;
+        display: none;
+      }
     </style>
-  <script type="importmap">
+    
+    <script type="importmap">
 {
   "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "@google/genai": "https://esm.sh/@google/genai@0.1.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0"
+    "react/": "https://aistudiocdn.com/react@^19.2.0/"
   }
 }
 </script>
-</head>
+    <script>
+      // Polyfill process.env for browser environment
+      window.process = {
+        env: {
+          NODE_ENV: 'production',
+          // Note: In a real deploy, you might replace this string with your key or inject it via build tools.
+          // Since we cannot ask for UI input, we assume it's injected here or previously defined.
+          API_KEY: '' 
+        }
+      };
+      
+      // Global error handler to catch "Black Screen" issues
+      window.onerror = function(message, source, lineno, colno, error) {
+        const errorDiv = document.getElementById('error-display');
+        if (errorDiv) {
+          errorDiv.style.display = 'block';
+          errorDiv.innerText = "SYSTEM ERROR: " + message + "\nSource: " + source + ":" + lineno;
+        }
+      };
+    </script>
+  </head>
   <body>
+    <div id="error-display"></div>
     <div id="root"></div>
-    <script type="module" src="./index.tsx"></script>
+
+    <script type="text/babel" data-type="module" data-presets="react,typescript">
+      import React, { useState, useEffect, useRef } from 'react';
+      import ReactDOM from 'react-dom/client';
+      import { GoogleGenAI } from "@google/genai";
+
+      // --- CONSTANTS & TYPES ---
+      
+      const Sender = {
+        USER: 'USER',
+        SYSTEM: 'SYSTEM',
+        AI: 'AI'
+      };
+
+      // --- AUDIO SERVICE ---
+
+      class AudioEngine {
+        constructor() {
+          this.ctx = null;
+          this.masterGain = null;
+          this.isMuted = false;
+          this.isInitialized = false;
+          this.bgmInterval = null;
+        }
+
+        init() {
+          if (this.isInitialized) return;
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          if (AudioContextClass) {
+            this.ctx = new AudioContextClass();
+            this.masterGain = this.ctx.createGain();
+            this.masterGain.connect(this.ctx.destination);
+            this.masterGain.gain.value = 0.3; 
+            this.isInitialized = true;
+          }
+        }
+
+        toggleMute() {
+          this.isMuted = !this.isMuted;
+          if (this.masterGain && this.ctx) {
+            this.masterGain.gain.setTargetAtTime(this.isMuted ? 0 : 0.3, this.ctx.currentTime, 0.1);
+          }
+          return this.isMuted;
+        }
+
+        playBlip() {
+          if (!this.ctx || this.isMuted) return;
+          try {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(800 + Math.random() * 200, this.ctx.currentTime);
+            
+            gain.gain.setValueAtTime(0.05, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.05);
+
+            osc.connect(gain);
+            gain.connect(this.masterGain);
+            osc.start();
+            osc.stop(this.ctx.currentTime + 0.05);
+          } catch(e) {}
+        }
+
+        playKeystroke() {
+          if (!this.ctx || this.isMuted) return;
+          try {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+            gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(this.masterGain);
+            osc.start();
+            osc.stop(this.ctx.currentTime + 0.1);
+          } catch(e) {}
+        }
+
+        playEnter() {
+          if (!this.ctx || this.isMuted) return;
+          try {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(440, this.ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(880, this.ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.2);
+            osc.connect(gain);
+            gain.connect(this.masterGain);
+            osc.start();
+            osc.stop(this.ctx.currentTime + 0.2);
+          } catch(e) {}
+        }
+
+        playBootSound() {
+          if (!this.ctx) this.init();
+          if (this.isMuted || !this.ctx) return;
+          
+          try {
+            const t = this.ctx.currentTime;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(110, t);
+            osc.frequency.linearRampToValueAtTime(880, t + 0.5);
+            
+            gain.gain.setValueAtTime(0, t);
+            gain.gain.linearRampToValueAtTime(0.2, t + 0.1);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 2);
+
+            osc.connect(gain);
+            gain.connect(this.masterGain);
+            osc.start();
+            osc.stop(t + 2);
+          } catch(e) {}
+        }
+
+        startBGM() {
+          if (!this.ctx || this.bgmInterval) return;
+          
+          const notes = [110, 130.81, 146.83, 164.81, 196.00, 130.81]; 
+          let noteIdx = 0;
+
+          const playNote = () => {
+            if (this.isMuted || !this.ctx) return;
+            try {
+              const osc = this.ctx.createOscillator();
+              const gain = this.ctx.createGain();
+              
+              osc.type = 'triangle'; 
+              osc.frequency.setValueAtTime(notes[noteIdx], this.ctx.currentTime);
+              
+              gain.gain.setValueAtTime(0.02, this.ctx.currentTime);
+              gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.5);
+              
+              osc.connect(gain);
+              gain.connect(this.masterGain);
+              osc.start();
+              osc.stop(this.ctx.currentTime + 0.5);
+
+              noteIdx = (noteIdx + 1) % notes.length;
+            } catch(e) {}
+          };
+
+          this.bgmInterval = window.setInterval(playNote, 400); 
+        }
+
+        stopBGM() {
+          if (this.bgmInterval) {
+            clearInterval(this.bgmInterval);
+            this.bgmInterval = null;
+          }
+        }
+      }
+
+      const audioService = new AudioEngine();
+
+      // --- GEMINI SERVICE ---
+
+      let chatSession = null;
+      let genAI = null;
+
+      const SYSTEM_INSTRUCTION = `
+你是一个名为 "幻境终端" (Phantom Terminal) 的1988年复古文字冒险游戏引擎。
+你的目标是为用户运行一个沉浸式的、交互式的小说游戏。
+
+规则：
+1. 语言：必须全程使用**中文**。
+2. 基调：氛围感强，描述生动但简洁（类似 Zork 或早期的 MUD 游戏）。
+3. 格式：纯文本。不要使用 Markdown 格式（如 **加粗** 或 # 标题）。如果需要强调，可以使用【】或大写。
+4. 机制：你需要隐式地追踪玩家的【生命值】（初始 100%）、【物品栏】和【位置】。
+5. 交互：在每段描述的最后，提示用户 "你会怎么做？" 或给出具体的选项。
+6. 首次互动：在游戏开始时，请让用户选择游戏题材："奇幻"、"科幻"、"赛博朋克" 或 "悬疑"。
+7. 状态查询：如果用户询问 "物品" 或 "状态"，请以复古的列表格式显示他们的状态。
+
+示例输出：
+你站在一条潮湿、昏暗的走廊里。水珠从头顶生锈的管道中滴落。
+北面是一扇沉重的钢门。南面是一片漆黑。
+你会怎么做？
+`;
+
+      const initializeGemini = () => {
+        try {
+          const apiKey = process.env.API_KEY || ''; 
+          if (apiKey) {
+            genAI = new GoogleGenAI({ apiKey });
+          } else {
+            console.warn("API Key not found in process.env");
+          }
+        } catch (e) {
+          console.error("Gemini Init Error", e);
+        }
+      };
+
+      const startNewGame = async () => {
+        if (!genAI) initializeGemini();
+        if (!genAI) return "错误：系统未连接 (API Key missing)。请检查配置。";
+
+        chatSession = genAI.chats.create({
+          model: 'gemini-2.5-flash',
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION,
+            temperature: 0.7,
+            maxOutputTokens: 500,
+          },
+        });
+
+        try {
+          const response = await chatSession.sendMessage({
+            message: "初始化系统。启动序列完成。请用中文开始游戏介绍，欢迎玩家来到【幻境终端】，并询问玩家想要游玩哪种题材（奇幻、科幻等）。"
+          });
+          return response.text || "系统错误：无数据返回";
+        } catch (error) {
+          console.error("Error starting game:", error);
+          return "严重错误：主机连接失败 (API Error)。";
+        }
+      };
+
+      const sendPlayerAction = async function* (action) {
+        if (!chatSession) {
+          yield "系统错误：无活动会话。";
+          return;
+        }
+
+        try {
+          const streamResult = await chatSession.sendMessageStream({ message: action });
+          
+          for await (const chunk of streamResult) {
+            if (chunk.text) {
+              yield chunk.text;
+            }
+          }
+        } catch (error) {
+          console.error("Stream error:", error);
+          yield "\n[连接中断]";
+        }
+      };
+
+      const generatePixelArtScene = async (contextText) => {
+        if (!genAI) initializeGemini();
+        if (!genAI) return null;
+
+        try {
+          const response = await genAI.models.generateContent({
+            model: 'gemini-2.5-flash-image', 
+            contents: {
+              parts: [{
+                text: `Create a retro 8-bit pixel art scene based on this description (Note: description is in Chinese): "${contextText}". 
+                Style: 1990s adventure game, limited color palette, dithering, low resolution aesthetic. 
+                Do not include text in the image. Return only the image.`
+              }]
+            }
+          });
+
+          for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) {
+              return `data:image/png;base64,${part.inlineData.data}`;
+            }
+          }
+          return null;
+        } catch (e) {
+          console.error("Failed to generate scene image:", e);
+          return null;
+        }
+      };
+
+      // --- COMPONENTS ---
+
+      const Scanlines = () => {
+        return (
+          <React.Fragment>
+            <div className="scanline-overlay"></div>
+            <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle,rgba(0,0,0,0)_60%,rgba(0,0,0,0.6)_100%)] z-40"></div>
+          </React.Fragment>
+        );
+      };
+
+      const TypewriterText = ({ 
+        text, 
+        speed = 15, 
+        onComplete,
+        onCharTyped,
+        isActive 
+      }) => {
+        const [displayedText, setDisplayedText] = useState('');
+        const indexRef = useRef(0);
+        const timerRef = useRef(null);
+
+        useEffect(() => {
+          if (!isActive) {
+            setDisplayedText(text);
+            return;
+          }
+
+          const animate = () => {
+            if (indexRef.current < text.length) {
+              const nextChar = text.charAt(indexRef.current);
+              setDisplayedText((prev) => prev + nextChar);
+              indexRef.current++;
+              
+              if (onCharTyped && nextChar.trim() !== '') {
+                onCharTyped();
+              }
+
+              timerRef.current = window.setTimeout(animate, speed);
+            } else {
+              if (onComplete) onComplete();
+            }
+          };
+
+          if (!timerRef.current && indexRef.current < text.length) {
+             animate();
+          }
+
+          return () => {
+            if (timerRef.current) clearTimeout(timerRef.current);
+          };
+        }, [text, speed, isActive, onComplete, onCharTyped]);
+
+        return <span className="whitespace-pre-wrap">{displayedText}</span>;
+      };
+
+      const TerminalInput = ({ onSubmit, disabled, themeColor }) => {
+        const [input, setInput] = useState('');
+        const inputRef = useRef(null);
+
+        useEffect(() => {
+          if (!disabled) {
+            inputRef.current?.focus();
+          }
+        }, [disabled]);
+
+        const handleKeyDown = (e) => {
+          if (!disabled) {
+             audioService.playKeystroke();
+          }
+        };
+
+        const handleSubmit = (e) => {
+          e.preventDefault();
+          if (input.trim() && !disabled) {
+            audioService.playEnter();
+            onSubmit(input);
+            setInput('');
+          }
+        };
+
+        const caretColorClass = themeColor === 'text-green-400' ? 'caret-green-400' : 
+                                themeColor === 'text-amber-400' ? 'caret-amber-400' : 'caret-cyan-400';
+
+        return (
+          <form onSubmit={handleSubmit} className="flex items-center w-full mt-4 relative">
+            <span className={`mr-2 font-bold ${themeColor} animate-pulse`}>{'>'}</span>
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={disabled}
+              className={`bg-transparent border-none outline-none w-full font-inherit text-xl md:text-2xl ${themeColor} ${caretColorClass} placeholder-gray-700`}
+              placeholder={disabled ? "处理中..." : "输入指令..."}
+              autoComplete="off"
+              spellCheck="false"
+            />
+          </form>
+        );
+      };
+
+      // --- APP ---
+
+      const BOOT_SEQUENCE = [
+        "BIOS 日期 01/01/1988 14:22:56 版本 2.0",
+        "CPU检测: NEC V20, 频率: 8 MHz",
+        "系统内核: 幻境OS (Phantom OS) v1.0",
+        "加载音频驱动... 正常",
+        "加载图形适配器... 正常",
+        "连接至幻境终端... 成功"
+      ];
+
+      const App = () => {
+        const [messages, setMessages] = useState([]);
+        const [gameStatus, setGameStatus] = useState('BOOT');
+        const [isProcessing, setIsProcessing] = useState(false);
+        const [theme, setTheme] = useState('green');
+        const [sceneImage, setSceneImage] = useState(null);
+        const [isMuted, setIsMuted] = useState(false);
+        const bottomRef = useRef(null);
+
+        const themeStyles = {
+          green: {
+            text: 'text-green-400',
+            border: 'border-green-800',
+            bg: 'bg-green-900/10'
+          },
+          amber: {
+            text: 'text-amber-400',
+            border: 'border-amber-800',
+            bg: 'bg-amber-900/10'
+          },
+          cyan: {
+            text: 'text-cyan-400',
+            border: 'border-cyan-800',
+            bg: 'bg-cyan-900/10'
+          }
+        };
+
+        const currentStyle = themeStyles[theme];
+
+        useEffect(() => {
+          bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, [messages, gameStatus]);
+
+        useEffect(() => {
+          let delay = 0;
+          const bootMsgs = [];
+
+          BOOT_SEQUENCE.forEach((line, i) => {
+            delay += 600 + Math.random() * 300;
+            setTimeout(() => {
+              setMessages(prev => [...prev, {
+                id: `boot-${i}`,
+                sender: Sender.SYSTEM,
+                text: line
+              }]);
+              audioService.playBlip();
+            }, delay);
+          });
+        }, []);
+
+        const handleStartInteraction = async () => {
+          if (gameStatus === 'PLAYING') return;
+          
+          audioService.init();
+          audioService.playBootSound();
+          audioService.startBGM();
+
+          setGameStatus('PLAYING');
+          initGame();
+        };
+
+        const initGame = async () => {
+          setIsProcessing(true);
+          const initialText = await startNewGame();
+          
+          generatePixelArtScene(initialText).then(img => {
+            if (img) setSceneImage(img);
+          });
+
+          setMessages(prev => [...prev, {
+            id: 'init-game',
+            sender: Sender.AI,
+            text: initialText,
+            isTyping: true
+          }]);
+          setIsProcessing(false);
+        };
+
+        const handleCommand = async (cmd) => {
+          if (cmd.toLowerCase().startsWith('/theme ')) {
+            const t = cmd.split(' ')[1];
+            if (['green', 'amber', 'cyan'].includes(t)) setTheme(t);
+            return;
+          }
+          if (cmd.toLowerCase() === '/cls') { setMessages([]); return; }
+
+          const userMsg = {
+            id: Date.now().toString(),
+            sender: Sender.USER,
+            text: cmd
+          };
+          setMessages(prev => [...prev, userMsg]);
+          setIsProcessing(true);
+
+          const aiMsgId = (Date.now() + 1).toString();
+          setMessages(prev => [...prev, {
+            id: aiMsgId,
+            sender: Sender.AI,
+            text: "",
+            isTyping: true
+          }]);
+
+          try {
+            const generator = sendPlayerAction(cmd);
+            let fullText = "";
+            
+            for await (const chunk of generator) {
+              fullText += chunk;
+              setMessages(prev => prev.map(msg => 
+                msg.id === aiMsgId ? { ...msg, text: fullText } : msg
+              ));
+            }
+
+            if (fullText.length > 50) { 
+              generatePixelArtScene(fullText).then(img => {
+                if (img) setSceneImage(img);
+              });
+            }
+
+          } catch (e) {
+            console.error(e);
+            setMessages(prev => [...prev, {
+              id: Date.now().toString(),
+              sender: Sender.SYSTEM,
+              text: "错误：链接丢失。"
+            }]);
+          } finally {
+            setIsProcessing(false);
+          }
+        };
+
+        const toggleMute = () => {
+          const muted = audioService.toggleMute();
+          setIsMuted(muted);
+        };
+
+        if (gameStatus === 'BOOT') {
+           return (
+             <div 
+               onClick={handleStartInteraction}
+               className="w-screen h-screen bg-black flex flex-col items-center justify-center cursor-pointer font-pixel text-white"
+             >
+               <div className="text-4xl md:text-6xl text-center mb-8 text-yellow-400 animate-pulse tracking-widest drop-shadow-[0_0_10px_rgba(250,204,21,0.5)]">
+                 幻境终端
+               </div>
+               <div className="w-full max-w-2xl p-6 border-4 border-white mb-8 bg-blue-900 shadow-[0_0_20px_rgba(30,58,138,0.6)]">
+                  {messages.map((m) => (
+                    <div key={m.id} className="text-green-400 font-mono mb-1">{m.text}</div>
+                  ))}
+               </div>
+               <div className="text-xl blink text-gray-400 animate-pulse">
+                 [ 点击屏幕 插入硬币 ]
+               </div>
+               <Scanlines />
+             </div>
+           );
+        }
+
+        return (
+          <div className="w-screen h-screen bg-[#1a1a1a] flex items-center justify-center p-2 md:p-6">
+            <div className="w-full max-w-5xl h-full max-h-[90vh] bg-[#2a2a2a] rounded-xl p-4 shadow-2xl border-b-8 border-r-8 border-[#111] flex flex-col relative">
+              <div className="flex justify-between items-center mb-4 px-2">
+                <h1 className="text-xl md:text-2xl text-gray-300 font-pixel drop-shadow-md">
+                  <span className="text-red-500">幻境</span>终端
+                </h1>
+                <div className="flex gap-4">
+                   <button onClick={toggleMute} className="font-pixel text-xs bg-gray-700 hover:bg-gray-600 text-white px-2 py-1 rounded border-b-2 border-black active:border-b-0 active:translate-y-[2px]">
+                      {isMuted ? "开启音效" : "静音"}
+                   </button>
+                   <div className="flex gap-2">
+                      <div className={`w-3 h-3 rounded-full ${isProcessing ? 'bg-red-500 animate-pulse' : 'bg-red-900'}`}></div>
+                      <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                   </div>
+                </div>
+              </div>
+
+              <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0">
+                 <div className={`
+                   md:w-1/3 min-h-[200px] md:min-h-0 
+                   border-4 border-white bg-black relative overflow-hidden
+                   pixel-border
+                 `}>
+                    <Scanlines />
+                    {sceneImage ? (
+                      <img src={sceneImage} alt="Scene" className="w-full h-full object-cover pixelated crt-flicker" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-gray-600 font-pixel text-xs text-center p-4">
+                         无视频信号输入<br/>视觉模块加载中...
+                      </div>
+                    )}
+                    <div className="absolute top-2 left-2 bg-blue-800/80 border-2 border-white p-2 text-white font-pixel text-[10px] md:text-xs">
+                       HP: 100%<br/>
+                       位置: 未知
+                    </div>
+                 </div>
+
+                 <div className={`
+                    flex-1 flex flex-col 
+                    border-4 border-white bg-black relative
+                    pixel-border
+                    ${currentStyle.bg}
+                 `}>
+                    <Scanlines />
+                    <div className={`flex-1 overflow-y-auto p-4 md:p-6 font-mono text-lg md:text-xl leading-relaxed ${currentStyle.text}`}>
+                      {messages.map((msg, index) => {
+                         const isLastAI = index === messages.length - 1 && msg.sender === Sender.AI;
+                         return (
+                          <div key={msg.id} className="mb-4 break-words">
+                            {msg.sender === Sender.USER && (
+                              <div className="flex items-center text-white bg-gray-800/50 p-1 mb-1 font-pixel text-xs w-fit px-2 border border-gray-600">
+                                玩家
+                              </div>
+                            )}
+                            
+                            <div className={msg.sender === Sender.USER ? "pl-2 opacity-90" : ""}>
+                               {msg.sender === Sender.SYSTEM ? (
+                                  <span className="text-red-500 font-bold font-pixel text-sm">{msg.text}</span>
+                               ) : (
+                                  <TypewriterText 
+                                    text={msg.text} 
+                                    isActive={isLastAI && isProcessing} 
+                                    speed={20} 
+                                    onCharTyped={() => audioService.playBlip()}
+                                  />
+                               )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div ref={bottomRef} />
+                    </div>
+                    
+                    <div className="p-4 bg-black border-t-2 border-white z-20">
+                      {gameStatus === 'PLAYING' && (
+                        <TerminalInput 
+                          onSubmit={handleCommand} 
+                          disabled={isProcessing} 
+                          themeColor={currentStyle.text}
+                        />
+                      )}
+                    </div>
+                 </div>
+              </div>
+
+              <div className="mt-2 text-center text-gray-500 font-pixel text-[10px]">
+                 指令: /theme [green|amber|cyan] | /cls (清屏)
+              </div>
+
+            </div>
+          </div>
+        );
+      };
+
+      const rootElement = document.getElementById('root');
+      if (rootElement) {
+        const root = ReactDOM.createRoot(rootElement);
+        root.render(
+          <React.StrictMode>
+            <App />
+          </React.StrictMode>
+        );
+      }
+    </script>
   </body>
 </html>
