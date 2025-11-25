@@ -111,16 +111,25 @@
 }
 </script>
     <script>
-      // Polyfill process.env for browser environment
-      window.process = {
-        env: {
-          NODE_ENV: 'production',
-          // Note: In a real deploy, you might replace this string with your key or inject it via build tools.
-          API_KEY: '' 
+      // 1. Initialize process.env polyfill
+      window.process = window.process || {};
+      window.process.env = window.process.env || {};
+      window.process.env.NODE_ENV = 'production';
+
+      // 2. Try to grab API Key from URL parameters (for static hosting convenience)
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlKey = urlParams.get('key');
+        if (urlKey) {
+          window.process.env.API_KEY = urlKey;
+          // Optional: Clean URL
+          // window.history.replaceState({}, document.title, window.location.pathname);
         }
-      };
-      
-      // Global error handler to catch "Black Screen" issues
+      } catch (e) {
+        console.warn("Could not parse URL params", e);
+      }
+
+      // 3. Global error handler
       window.onerror = function(message, source, lineno, colno, error) {
         const errorDiv = document.getElementById('error-display');
         if (errorDiv) {
@@ -323,17 +332,18 @@
           const apiKey = process.env.API_KEY || ''; 
           if (apiKey) {
             genAI = new GoogleGenAI({ apiKey });
-          } else {
-            console.warn("API Key not found in process.env");
-          }
+          } 
         } catch (e) {
           console.error("Gemini Init Error", e);
         }
       };
 
       const startNewGame = async () => {
-        if (!genAI) initializeGemini();
-        if (!genAI) return "错误：系统未连接 (API Key missing)。请检查配置。";
+        initializeGemini();
+        
+        if (!genAI) {
+          return "【系统错误】\n未检测到 API Key。\n\n请在浏览器地址栏后添加 ?key=您的API_KEY\n例如: ?key=AIzaSy...\n然后刷新页面。";
+        }
 
         chatSession = genAI.chats.create({
           model: 'gemini-2.5-flash',
@@ -351,13 +361,16 @@
           return response.text || "系统错误：无数据返回";
         } catch (error) {
           console.error("Error starting game:", error);
-          return "严重错误：主机连接失败 (API Error)。";
+          if (error.message && error.message.includes('API key')) {
+             return "【验证失败】\n无效的 API Key。\n请检查您的 URL 参数是否正确。";
+          }
+          return "严重错误：主机连接失败 (网络或配额问题)。";
         }
       };
 
       const sendPlayerAction = async function* (action) {
         if (!chatSession) {
-          yield "系统错误：无活动会话。";
+          yield "系统错误：无活动会话。请刷新重试。";
           return;
         }
 
@@ -376,7 +389,6 @@
       };
 
       const generatePixelArtScene = async (contextText) => {
-        if (!genAI) initializeGemini();
         if (!genAI) return null;
 
         try {
@@ -582,9 +594,12 @@
           setIsProcessing(true);
           const initialText = await startNewGame();
           
-          generatePixelArtScene(initialText).then(img => {
-            if (img) setSceneImage(img);
-          });
+          // Only attempt to generate image if we got valid text back (not an error message string)
+          if (!initialText.includes("【系统错误】") && !initialText.includes("严重错误")) {
+             generatePixelArtScene(initialText).then(img => {
+               if (img) setSceneImage(img);
+             });
+          }
 
           setMessages(prev => [...prev, {
             id: 'init-game',
