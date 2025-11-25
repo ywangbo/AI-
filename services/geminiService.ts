@@ -23,16 +23,23 @@ const SYSTEM_INSTRUCTION = `
 `;
 
 export const initializeGemini = (): void => {
-  if (process.env.API_KEY) {
-    genAI = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  } else {
-    console.error("API_KEY is missing in process.env");
+  try {
+    // Safely check for process.env to avoid ReferenceError in browser environments
+    const apiKey = (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : undefined;
+    
+    if (apiKey) {
+      genAI = new GoogleGenAI({ apiKey });
+    } else {
+      console.error("API_KEY is missing. Check your environment configuration.");
+    }
+  } catch (e) {
+    console.error("Failed to initialize Gemini client:", e);
   }
 };
 
 export const startNewGame = async (): Promise<string> => {
   if (!genAI) initializeGemini();
-  if (!genAI) throw new Error("Failed to initialize AI");
+  if (!genAI) return "错误：系统未连接 (API Key missing)。";
 
   chatSession = genAI.chats.create({
     model: 'gemini-2.5-flash',
